@@ -15,17 +15,56 @@ def _string_constant(path: Path, name: str) -> str:
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_speculative_caption_promotes_the_same_history_row():
+def test_live_caption_words_are_appended_without_rewriting_existing_nodes():
     html = _string_constant(
         ROOT / "scripts" / "meeting_captions_buffered.py",
         "MEETING_DASHBOARD_HTML",
     )
 
-    assert "speculativeRow = makeRow(clean, 'speculative');" in html
-    assert "let row = speculativeRow && speculativeRow.isConnected ? speculativeRow : null;" in html
+    assert ".word { display:inline-block; white-space:nowrap; }" in html
+    assert "function appendWordNode(container, word)" in html
+    assert "container.appendChild(span);" in html
+    assert "function appendStableWord(word)" in html
+    assert "displayedWords.push(word);" in html
+
+
+def test_live_caption_only_commits_words_stable_across_partial_hypotheses():
+    html = _string_constant(
+        ROOT / "scripts" / "meeting_captions_buffered.py",
+        "MEETING_DASHBOARD_HTML",
+    )
+
+    assert "function commonPrefixLength(a, b)" in html
+    assert "const stableLimit = commonPrefixLength(previousPartialWords, words);" in html
+    assert "function stableContinuationIndex(words, limit)" in html
+    assert "const locked = lockedWords();" in html
+    assert "queueStableWords(words.slice(start, stableLimit));" in html
+
+
+def test_live_caption_reveals_new_words_progressively():
+    html = _string_constant(
+        ROOT / "scripts" / "meeting_captions_buffered.py",
+        "MEETING_DASHBOARD_HTML",
+    )
+
+    assert "const WORD_REVEAL_MS = 55;" in html
+    assert "function drainWordQueue()" in html
+    assert "appendStableWord(pendingWords.shift());" in html
+    assert "setTimeout(() =>" in html
+
+
+def test_finalization_promotes_streamed_rows_without_replacing_their_text():
+    html = _string_constant(
+        ROOT / "scripts" / "meeting_captions_buffered.py",
+        "MEETING_DASHBOARD_HTML",
+    )
+
+    assert "function finalizeLiveRows(text)" in html
     assert "row.classList.remove('speculative');" in html
     assert "row.classList.add('final');" in html
-    assert "row.querySelector('.text').textContent = text;" in html
+    assert "appendFinalRemainder(text);" in html
+    finalize_body = html.split("function finalizeLiveRows(text)", 1)[1].split("function addFinal(text)", 1)[0]
+    assert ".textContent = text" not in finalize_body
 
 
 def test_speculative_mode_is_default_and_copy_all_uses_only_finals():
@@ -50,19 +89,6 @@ def test_meeting_caption_display_chunks_long_utterances():
     assert "new Intl.Segmenter('en', {granularity:'sentence'})" in html
     assert "function splitLongCaption(text)" in html
     assert "function splitCaptionText(text)" in html
-    assert "function currentCaptionBlock(text)" in html
-    assert "const clean = currentCaptionBlock(text);" in html
-
-
-def test_final_chunks_keep_the_speculative_tail_row_in_place():
-    html = _string_constant(
-        ROOT / "scripts" / "meeting_captions_buffered.py",
-        "MEETING_DASHBOARD_HTML",
-    )
-
-    assert "for (const block of blocks.slice(0, -1))" in html
-    assert "makeRow(block, 'final', stamp, row);" in html
-    assert "promoteRow(row, blocks[blocks.length - 1], stamp);" in html
     assert '<span class="count"><span id="count">0</span> 字幕</span>' in html
 
 
