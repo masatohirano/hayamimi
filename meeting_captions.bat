@@ -36,7 +36,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "PY=.venv\Scripts\python.exe"
 
-"%PY%" -c "import numpy, sherpa_onnx, onnxruntime, pyaudiowpatch" >nul 2>nul
+"%PY%" -c "import numpy, sherpa_onnx, onnxruntime, pyaudiowpatch, soxr" >nul 2>nul
 if errorlevel 1 (
   echo [first run] Installing meeting-caption dependencies...
   "%PY%" -m pip install --upgrade pip
