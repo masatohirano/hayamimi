@@ -3,4 +3,5 @@
 numpy==2.4.6
 sherpa-onnx==1.13.6
 onnxruntime==1.29.0
+soxr>=0.3.7,<2
 PyAudioWPatch==0.2.12.8; sys_platform == "win32"
