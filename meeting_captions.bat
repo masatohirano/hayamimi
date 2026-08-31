@@ -9,8 +9,8 @@ echo   hayamimi - English Meeting Captions
 echo ============================================
 echo.
 
-if not exist "scripts\meeting_captions.py" (
-  echo [ERROR] scripts\meeting_captions.py was not found.
+if not exist "scripts\meeting_captions_buffered.py" (
+  echo [ERROR] scripts\meeting_captions_buffered.py was not found.
   echo Run this file from the hayamimi repository root.
   pause
   exit /b 1
@@ -61,14 +61,14 @@ echo Capturing the Windows default playback device.
 echo Keep Teams / Zoom / Meet audio playing through your normal headphones.
 echo The dashboard will open automatically. Press Ctrl+C here to stop.
 echo.
-"%PY%" scripts\meeting_captions.py
+"%PY%" scripts\meeting_captions_buffered.py
 set "EXITCODE=%ERRORLEVEL%"
 if not "%EXITCODE%"=="0" (
   echo.
   echo If your meeting app uses a different output device, run:
-  echo   "%PY%" scripts\meeting_captions.py --list-devices
+  echo   "%PY%" scripts\meeting_captions_buffered.py --list-devices
   echo then launch with:
-  echo   "%PY%" scripts\meeting_captions.py --device DEVICE_NUMBER
+  echo   "%PY%" scripts\meeting_captions_buffered.py --device DEVICE_NUMBER
   echo.
   pause
 )
