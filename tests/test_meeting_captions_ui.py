@@ -95,3 +95,11 @@ def test_meeting_caption_display_chunks_long_utterances():
 def test_windows_meeting_vad_defaults_to_350ms_silence():
     source = (ROOT / "scripts" / "meeting_captions.py").read_text(encoding="utf-8")
     assert 'ap.add_argument("--min-silence", type=float, default=0.35,' in source
+
+
+def test_windows_meeting_partial_updates_default_to_300ms_only():
+    meeting = (ROOT / "scripts" / "meeting_captions.py").read_text(encoding="utf-8")
+    realtime = (ROOT / "scripts" / "realtime_transcribe.py").read_text(encoding="utf-8")
+    assert 'ap.add_argument("--partial-every", type=float, default=0.30,' in meeting
+    assert 'realtime_transcribe.PARTIAL_EVERY_S = max(args.partial_every, 0.05)' in meeting
+    assert 'PARTIAL_EVERY_S = 0.5' in realtime
