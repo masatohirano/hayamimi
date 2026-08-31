@@ -23,11 +23,13 @@ If the meeting application is configured to use a different output device, run:
 
 - English is forced, so no per-utterance language switching is needed.
 - English ASR uses Hayamimi's Parakeet TDT 0.6B v3 route.
+- VAD finalizes after 0.20 seconds of silence by default for lower meeting-caption latency.
 - A meeting-focused browser dashboard opens automatically at `http://localhost:8833/dashboard`.
-- In-progress speech stays in a compact Live area, while finalized captions accumulate in a scrollable history.
-- The history follows the newest caption only while you are already at the bottom. If you scroll up to reread something, new captions do not pull you away; a `最新へ` button returns to the newest line.
+- Speculative captions are enabled by default: the current partial transcript appears as a dimmed row at the end of the history, and the same row is promoted to a finalized caption when the final result arrives.
+- The `speculative: ON/OFF` button switches between that mode and the separate Live area. The preference is retained in the browser.
+- The history follows the newest caption only while you are already at the bottom. If you scroll up to reread something, partial updates and new finals do not pull you away; a `最新へ` button returns to the newest line after a new final arrives.
 - Up to 1000 finalized lines are buffered in memory and replayed if the browser reconnects or refreshes during the session.
-- Finalized lines can be selected and copied individually, and the `全体をコピー` button copies the whole visible buffer.
+- Finalized lines can be selected and copied individually, and the `全体をコピー` button copies only finalized captions, not the speculative row.
 - No meeting bot joins the call.
 - Audio stays local to Hayamimi's normal CPU-only pipeline.
 - Transcripts are not written to disk unless `--transcript PATH` is supplied.
