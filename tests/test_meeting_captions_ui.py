@@ -38,6 +38,34 @@ def test_speculative_mode_is_default_and_copy_all_uses_only_finals():
     assert "querySelectorAll('.line.final .text')" in html
 
 
+def test_meeting_caption_display_chunks_long_utterances():
+    html = _string_constant(
+        ROOT / "scripts" / "meeting_captions_buffered.py",
+        "MEETING_DASHBOARD_HTML",
+    )
+
+    assert "const CAPTION_MAX_WORDS = 24;" in html
+    assert "const CAPTION_MAX_CHARS = 160;" in html
+    assert "function sentenceUnits(text)" in html
+    assert "new Intl.Segmenter('en', {granularity:'sentence'})" in html
+    assert "function splitLongCaption(text)" in html
+    assert "function splitCaptionText(text)" in html
+    assert "function currentCaptionBlock(text)" in html
+    assert "const clean = currentCaptionBlock(text);" in html
+
+
+def test_final_chunks_keep_the_speculative_tail_row_in_place():
+    html = _string_constant(
+        ROOT / "scripts" / "meeting_captions_buffered.py",
+        "MEETING_DASHBOARD_HTML",
+    )
+
+    assert "for (const block of blocks.slice(0, -1))" in html
+    assert "makeRow(block, 'final', stamp, row);" in html
+    assert "promoteRow(row, blocks[blocks.length - 1], stamp);" in html
+    assert '<span class="count"><span id="count">0</span> 字幕</span>' in html
+
+
 def test_windows_meeting_vad_defaults_to_200ms_silence():
     source = (ROOT / "scripts" / "meeting_captions.py").read_text(encoding="utf-8")
     assert 'ap.add_argument("--min-silence", type=float, default=0.20,' in source
