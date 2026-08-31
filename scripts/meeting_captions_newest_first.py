@@ -1,14 +1,115 @@
 """Launch Windows meeting captions with newest history entries at the top.
 
-This keeps the live display at the top of the page and reverses only the
-meeting-history insertion/follow behavior. The underlying ASR, VAD, replay
-buffer, and append-only word streaming stay unchanged.
+This wrapper keeps Hayamimi's general multilingual pipeline unchanged while
+applying meeting-only presentation and audio-input tuning:
+  * newest finalized history stays directly below the live area
+  * live words must survive three partial hypotheses and the newest two words
+    remain withheld until they move deeper into the stable prefix
+  * Windows playback audio is streaming-resampled to 16 kHz with soxr MQ
 """
 
 from __future__ import annotations
 
+import numpy as np
+import soxr
+
+import meeting_captions
 import subtitle_server
 import meeting_captions_buffered as buffered
+
+
+_MEETING_RESAMPLERS: dict[tuple[int, int], soxr.ResampleStream] = {}
+
+
+def _meeting_resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Meeting-only streaming resampler; ASR output rate remains unchanged."""
+    samples = np.ascontiguousarray(samples, dtype=np.float32)
+    if src_rate == dst_rate:
+        return samples
+    key = (src_rate, dst_rate)
+    stream = _MEETING_RESAMPLERS.get(key)
+    if stream is None:
+        stream = soxr.ResampleStream(
+            src_rate,
+            dst_rate,
+            1,
+            dtype="float32",
+            quality="MQ",
+        )
+        _MEETING_RESAMPLERS[key] = stream
+    return np.asarray(stream.resample_chunk(samples, last=False), dtype=np.float32)
+
+
+def _patch_live_stability_html(html: str) -> str:
+    replacements = [
+        (
+            "  let previousPartialWords = [];",
+            "  let partialWordHistory = [];",
+        ),
+        (
+            "  const LIVE_ANCHOR_WORDS = 8;\n"
+            "  const WORD_REVEAL_MS = 55;",
+            "  const LIVE_ANCHOR_WORDS = 8;\n"
+            "  const LIVE_STABILITY_PARTIALS = 3;\n"
+            "  const LIVE_HOLD_WORDS = 2;\n"
+            "  const WORD_REVEAL_MS = 55;",
+        ),
+        (
+            "  function acceptPartial(text) {\n"
+            "    const words = tokenizeWords(text);\n"
+            "    if (!words.length) {\n"
+            "      previousPartialWords = [];\n"
+            "      return;\n"
+            "    }\n"
+            "    if (!previousPartialWords.length) {\n"
+            "      previousPartialWords = words;\n"
+            "      return;\n"
+            "    }\n\n"
+            "    const stableLimit = commonPrefixLength(previousPartialWords, words);\n"
+            "    const start = stableContinuationIndex(words, stableLimit);\n"
+            "    if (start !== null && stableLimit > start) {\n"
+            "      queueStableWords(words.slice(start, stableLimit));\n"
+            "    }\n"
+            "    previousPartialWords = words;\n"
+            "  }",
+            "  function stablePrefixAcrossHistory(history) {\n"
+            "    if (history.length < LIVE_STABILITY_PARTIALS) return 0;\n"
+            "    let limit = history[0].length;\n"
+            "    for (let i = 1; i < history.length; i += 1) {\n"
+            "      limit = Math.min(limit, commonPrefixLength(history[i - 1], history[i]));\n"
+            "      if (!limit) break;\n"
+            "    }\n"
+            "    return limit;\n"
+            "  }\n\n"
+            "  function acceptPartial(text) {\n"
+            "    const words = tokenizeWords(text);\n"
+            "    if (!words.length) {\n"
+            "      partialWordHistory = [];\n"
+            "      return;\n"
+            "    }\n"
+            "    partialWordHistory.push(words);\n"
+            "    if (partialWordHistory.length > LIVE_STABILITY_PARTIALS) partialWordHistory.shift();\n"
+            "    if (partialWordHistory.length < LIVE_STABILITY_PARTIALS) return;\n\n"
+            "    const stableLimit = stablePrefixAcrossHistory(partialWordHistory);\n"
+            "    const displayLimit = Math.max(0, stableLimit - LIVE_HOLD_WORDS);\n"
+            "    const start = stableContinuationIndex(words, displayLimit);\n"
+            "    if (start !== null && displayLimit > start) {\n"
+            "      queueStableWords(words.slice(start, displayLimit));\n"
+            "    }\n"
+            "  }",
+        ),
+        (
+            "    previousPartialWords = [];\n"
+            "    displayedWords = [];",
+            "    partialWordHistory = [];\n"
+            "    displayedWords = [];",
+        ),
+    ]
+    for old, new in replacements:
+        if old not in html:
+            raise RuntimeError(f"meeting live-stability patch target not found: {old[:60]!r}")
+        html = html.replace(old, new, 1)
+    return html
 
 
 def _patch_dashboard_html(html: str) -> str:
@@ -46,7 +147,10 @@ def _patch_dashboard_html(html: str) -> str:
     return html
 
 
-buffered.MEETING_DASHBOARD_HTML = _patch_dashboard_html(buffered.MEETING_DASHBOARD_HTML)
+meeting_captions.resample_linear = _meeting_resample
+buffered.MEETING_DASHBOARD_HTML = _patch_dashboard_html(
+    _patch_live_stability_html(buffered.MEETING_DASHBOARD_HTML)
+)
 subtitle_server.DASHBOARD_HTML = buffered.MEETING_DASHBOARD_HTML
 
 
