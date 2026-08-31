@@ -28,6 +28,7 @@ import webbrowser
 
 import numpy as np
 
+import realtime_transcribe
 from asr_engine import RoutedASR
 from audio_utils import decode_pcm16, resample_linear
 from realtime_transcribe import (
@@ -243,6 +244,8 @@ def main() -> int:
                     help="local dashboard port (default 8833)")
     ap.add_argument("--threads", type=int, default=4,
                     help="Parakeet inference threads (default 4)")
+    ap.add_argument("--partial-every", type=float, default=0.30,
+                    help="partial ASR update interval (default 0.30 s)")
     ap.add_argument("--min-silence", type=float, default=0.35,
                     help="silence that finalizes an utterance (default 0.35 s)")
     ap.add_argument("--max-speech", type=float, default=12.0,
@@ -261,6 +264,11 @@ def main() -> int:
 
     # Fail clearly before loading ASR if system audio is unavailable.
     _require_pyaudiowpatch()
+
+    # run_stream() reads its partial interval from the realtime_transcribe
+    # module global. Override it only in this meeting-caption process so the
+    # general Hayamimi CLI keeps its 0.5 s default.
+    realtime_transcribe.PARTIAL_EVERY_S = max(args.partial_every, 0.05)
 
     from subtitle_server import SubtitleServer
 
