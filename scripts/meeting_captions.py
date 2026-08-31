@@ -243,8 +243,8 @@ def main() -> int:
                     help="local dashboard port (default 8833)")
     ap.add_argument("--threads", type=int, default=4,
                     help="Parakeet inference threads (default 4)")
-    ap.add_argument("--min-silence", type=float, default=0.20,
-                    help="silence that finalizes an utterance (default 0.20 s)")
+    ap.add_argument("--min-silence", type=float, default=0.35,
+                    help="silence that finalizes an utterance (default 0.35 s)")
     ap.add_argument("--max-speech", type=float, default=12.0,
                     help="force-finalize continuous speech after this many seconds")
     ap.add_argument("--no-refine", action="store_true",
