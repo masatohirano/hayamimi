@@ -24,6 +24,7 @@ If the meeting application is configured to use a different output device, run:
 - English is forced, so no per-utterance language switching is needed.
 - English ASR uses Hayamimi's Parakeet TDT 0.6B v3 route.
 - VAD finalizes after 0.35 seconds of silence by default.
+- Partial ASR hypotheses update every 0.30 seconds in meeting mode by default. Use `--partial-every SEC` to tune it; the general Hayamimi pipeline keeps its 0.5-second default.
 - A meeting-focused browser dashboard opens automatically at `http://localhost:8833/dashboard`.
 - Speculative captions are enabled by default.
 - Live captions use an append-only word stream. A word is shown after it survives consecutive partial hypotheses, then that DOM node is never rewritten or moved by later ASR revisions. Newly stable words are revealed one by one at a short interval, similar to video captions.
