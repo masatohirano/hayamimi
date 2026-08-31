@@ -22,8 +22,10 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
            display:flex; align-items:center; gap:12px; }
   header strong { font-size:15px; }
   #status { margin-left:auto; color:var(--muted); font-size:12px; }
+  #speculative-toggle { font-size:12px; padding:5px 9px; }
   #live { flex:none; background:var(--panel); border-bottom:1px solid var(--line);
           padding:12px 18px 16px; min-height:100px; }
+  #live[hidden] { display:none; }
   .label { color:var(--muted); font-size:11px; letter-spacing:.12em; margin-bottom:7px; }
   #partial { font-size:23px; line-height:1.45; min-height:34px; }
   #partial.idle { color:#6d717a; }
@@ -37,6 +39,8 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
              scroll-behavior:smooth; }
   .line { display:grid; grid-template-columns:72px minmax(0,1fr); gap:10px;
           padding:10px 0; border-bottom:1px solid #202329; }
+  .line.speculative { opacity:.70; }
+  .line.speculative .time::after { content:' ~'; }
   .time { color:var(--muted); font-size:11px; padding-top:3px;
           font-variant-numeric:tabular-nums; }
   .text { font-size:18px; line-height:1.55; user-select:text; }
@@ -52,6 +56,7 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
 <body>
 <header>
   <strong>早耳 Meeting Captions</strong>
+  <button id="speculative-toggle" type="button" aria-pressed="true">speculative: ON</button>
   <span id="status">connecting...</span>
 </header>
 <section id="live">
@@ -69,13 +74,17 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
 <button id="jump" type="button" hidden>最新へ</button>
 <script>
   const historyBox = document.getElementById('history');
+  const live = document.getElementById('live');
   const partial = document.getElementById('partial');
   const status = document.getElementById('status');
   const countEl = document.getElementById('count');
   const empty = document.getElementById('empty');
   const jump = document.getElementById('jump');
   const copyAll = document.getElementById('copy-all');
-  let follow = true, unseen = 0, count = 0;
+  const speculativeToggle = document.getElementById('speculative-toggle');
+  let follow = true, unseen = 0, count = 0, currentPartial = '';
+  let speculativeRow = null;
+  let speculativeEnabled = localStorage.getItem('hayamimi-speculative') !== 'off';
   const MAX_LINES = 1000;
 
   function nearBottom() {
@@ -91,29 +100,107 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   });
   jump.addEventListener('click', goLatest);
 
-  function addFinal(text) {
-    if (!text || !text.trim()) return;
-    if (empty.isConnected) empty.remove();
-    const row = document.createElement('div'); row.className = 'line';
-    const tm = document.createElement('div'); tm.className = 'time';
-    tm.textContent = new Date().toLocaleTimeString([], {
+  function timestamp() {
+    return new Date().toLocaleTimeString([], {
       hour:'2-digit', minute:'2-digit', second:'2-digit'
     });
+  }
+
+  function ensureEmpty() {
+    if (count === 0 && !historyBox.querySelector('.line') && !empty.isConnected) {
+      historyBox.appendChild(empty);
+    }
+  }
+
+  function makeRow(text, kind) {
+    if (empty.isConnected) empty.remove();
+    const row = document.createElement('div'); row.className = `line ${kind}`;
+    const tm = document.createElement('div'); tm.className = 'time'; tm.textContent = timestamp();
     const tx = document.createElement('div'); tx.className = 'text'; tx.textContent = text;
     row.append(tm, tx); historyBox.appendChild(row);
-    count += 1; countEl.textContent = count;
-    while (historyBox.querySelectorAll('.line').length > MAX_LINES) {
-      historyBox.querySelector('.line')?.remove();
+    return row;
+  }
+
+  function trimFinals() {
+    let finals = historyBox.querySelectorAll('.line.final');
+    while (finals.length > MAX_LINES) {
+      finals[0].remove();
+      finals = historyBox.querySelectorAll('.line.final');
     }
-    if (follow || nearBottom()) {
+    count = finals.length;
+    countEl.textContent = count;
+  }
+
+  function showSpeculative(text) {
+    if (!speculativeEnabled) return;
+    const clean = text || '';
+    if (!clean.trim()) {
+      if (speculativeRow?.isConnected) speculativeRow.remove();
+      speculativeRow = null;
+      ensureEmpty();
+      return;
+    }
+    const shouldFollow = follow || nearBottom();
+    if (!speculativeRow || !speculativeRow.isConnected) {
+      speculativeRow = makeRow(clean, 'speculative');
+    } else {
+      speculativeRow.querySelector('.text').textContent = clean;
+    }
+    if (shouldFollow) goLatest();
+  }
+
+  function addFinal(text) {
+    if (!text || !text.trim()) return;
+    const shouldFollow = follow || nearBottom();
+    let row = speculativeRow && speculativeRow.isConnected ? speculativeRow : null;
+    if (row) {
+      row.classList.remove('speculative');
+      row.classList.add('final');
+      row.querySelector('.text').textContent = text;
+      row.querySelector('.time').textContent = timestamp();
+      speculativeRow = null;
+    } else {
+      row = makeRow(text, 'final');
+    }
+    trimFinals();
+    if (shouldFollow) {
       goLatest();
     } else {
       unseen += 1; jump.hidden = false; jump.textContent = `最新へ (${unseen})`;
     }
   }
 
+  function updatePartialDisplay(text) {
+    currentPartial = text || '';
+    if (currentPartial.trim()) {
+      partial.classList.remove('idle'); partial.textContent = currentPartial;
+    } else {
+      partial.classList.add('idle'); partial.textContent = '音声を待っています...';
+    }
+    showSpeculative(currentPartial);
+  }
+
+  function applySpeculativeMode() {
+    live.hidden = speculativeEnabled;
+    speculativeToggle.textContent = `speculative: ${speculativeEnabled ? 'ON' : 'OFF'}`;
+    speculativeToggle.setAttribute('aria-pressed', speculativeEnabled ? 'true' : 'false');
+    if (speculativeEnabled) {
+      showSpeculative(currentPartial);
+    } else if (speculativeRow?.isConnected) {
+      speculativeRow.remove();
+      speculativeRow = null;
+      ensureEmpty();
+    }
+  }
+
+  speculativeToggle.addEventListener('click', () => {
+    speculativeEnabled = !speculativeEnabled;
+    localStorage.setItem('hayamimi-speculative', speculativeEnabled ? 'on' : 'off');
+    applySpeculativeMode();
+  });
+
   copyAll.addEventListener('click', async () => {
-    const text = Array.from(historyBox.querySelectorAll('.text'))
+    const text = Array.from(historyBox.querySelectorAll('.line.final .text'))
       .map(x => x.textContent).join('\n');
     if (!text) return;
     try {
@@ -121,10 +208,16 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
       copyAll.textContent = 'コピーしました';
       setTimeout(() => copyAll.textContent = '全体をコピー', 1200);
     } catch (_) {
-      const range = document.createRange(); range.selectNodeContents(historyBox);
+      const finalized = historyBox.querySelectorAll('.line.final');
+      if (!finalized.length) return;
+      const range = document.createRange();
+      range.setStartBefore(finalized[0]);
+      range.setEndAfter(finalized[finalized.length - 1]);
       const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
     }
   });
+
+  applySpeculativeMode();
 
   const es = new EventSource('/events');
   es.onopen = () => {
@@ -132,15 +225,18 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     // The server replays the finalized buffer on every SSE reconnect. Clear
     // rendered rows first so a transient reconnect never duplicates captions.
     historyBox.querySelectorAll('.line').forEach(x => x.remove());
+    speculativeRow = null; currentPartial = '';
+    partial.classList.add('idle'); partial.textContent = '音声を待っています...';
     count = 0; countEl.textContent = '0'; unseen = 0; follow = true;
-    jump.hidden = true; jump.textContent = '最新へ';
+    jump.hidden = true; jump.textContent = '最新へ'; ensureEmpty();
   };
   es.onerror = () => { status.textContent = 'reconnecting...'; };
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.type === 'partial') {
-      partial.classList.remove('idle'); partial.textContent = ev.text || '';
+      updatePartialDisplay(ev.text || '');
     } else if (ev.type === 'final') {
+      currentPartial = '';
       partial.classList.add('idle'); partial.textContent = '音声を待っています...';
       addFinal(ev.text);
     }
