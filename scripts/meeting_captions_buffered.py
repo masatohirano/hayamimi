@@ -127,7 +127,14 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   });
 
   const es = new EventSource('/events');
-  es.onopen = () => { status.textContent = 'connected'; };
+  es.onopen = () => {
+    status.textContent = 'connected';
+    // The server replays the finalized buffer on every SSE reconnect. Clear
+    // rendered rows first so a transient reconnect never duplicates captions.
+    historyBox.querySelectorAll('.line').forEach(x => x.remove());
+    count = 0; countEl.textContent = '0'; unseen = 0; follow = true;
+    jump.hidden = true; jump.textContent = '最新へ';
+  };
   es.onerror = () => { status.textContent = 'reconnecting...'; };
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
