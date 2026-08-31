@@ -29,6 +29,7 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   .label { color:var(--muted); font-size:11px; letter-spacing:.12em; margin-bottom:7px; }
   #partial { font-size:23px; line-height:1.45; min-height:34px; }
   #partial.idle { color:#6d717a; }
+  #partial .live-block { display:block; min-height:1.45em; }
   #history-head { flex:none; padding:10px 18px; border-bottom:1px solid var(--line);
                   display:flex; align-items:center; gap:12px; }
   #history-head .count { color:var(--muted); font-size:12px; }
@@ -44,6 +45,7 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   .time { color:var(--muted); font-size:11px; padding-top:3px;
           font-variant-numeric:tabular-nums; }
   .text { font-size:18px; line-height:1.55; user-select:text; }
+  .word { display:inline-block; white-space:nowrap; }
   #empty { color:#666b74; padding:20px 0; }
   #jump { position:fixed; right:24px; bottom:22px; background:#252a35;
           border-color:#3a4151; box-shadow:0 4px 18px rgba(0,0,0,.35); }
@@ -83,12 +85,18 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   const copyAll = document.getElementById('copy-all');
   const speculativeToggle = document.getElementById('speculative-toggle');
   let follow = true, unseen = 0, count = 0, currentPartial = '';
-  let speculativeRow = null;
+  let previousPartialWords = [];
+  let displayedWords = [];
+  let pendingWords = [];
+  let wordTimer = null;
+  let liveBlocks = [];
   let speculativeEnabled = localStorage.getItem('hayamimi-speculative') !== 'off';
   const MAX_LINES = 1000;
   const CAPTION_MAX_WORDS = 24;
   const CAPTION_MIN_WORDS = 10;
   const CAPTION_MAX_CHARS = 160;
+  const LIVE_ANCHOR_WORDS = 8;
+  const WORD_REVEAL_MS = 55;
 
   function nearBottom() {
     return historyBox.scrollHeight - historyBox.scrollTop - historyBox.clientHeight < 90;
@@ -113,9 +121,30 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     return (text || '').replace(/\s+/g, ' ').trim();
   }
 
-  function captionWordCount(text) {
+  function tokenizeWords(text) {
     const clean = normalizeCaptionText(text);
-    return clean ? clean.split(' ').length : 0;
+    return clean ? clean.split(' ') : [];
+  }
+
+  function wordKey(word) {
+    const lowered = (word || '').toLowerCase();
+    const stripped = lowered.replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, '');
+    return stripped || lowered;
+  }
+
+  function sameWord(a, b) {
+    return wordKey(a) === wordKey(b);
+  }
+
+  function commonPrefixLength(a, b) {
+    const n = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < n && sameWord(a[i], b[i])) i += 1;
+    return i;
+  }
+
+  function captionWordCount(text) {
+    return tokenizeWords(text).length;
   }
 
   function fitsCaption(text) {
@@ -141,14 +170,12 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
       }
       if (end === start) end += 1;
 
-      // Avoid an awkward 24-word block followed by a one- or two-word tail.
       const tail = words.length - end;
       if (tail > 0 && tail < CAPTION_MIN_WORDS && end - start > CAPTION_MIN_WORDS) {
         const giveBack = CAPTION_MIN_WORDS - tail;
         end = Math.max(start + CAPTION_MIN_WORDS, end - giveBack);
       }
 
-      // Prefer a nearby clause boundary without creating a tiny block.
       if (end < words.length && end - start > CAPTION_MIN_WORDS) {
         for (let i = end; i > start + CAPTION_MIN_WORDS; i -= 1) {
           if (/[,;:]$/.test(words[i - 1])) {
@@ -204,11 +231,6 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     return blocks;
   }
 
-  function currentCaptionBlock(text) {
-    const blocks = splitCaptionText(text);
-    return blocks.length ? blocks[blocks.length - 1] : '';
-  }
-
   function ensureEmpty() {
     if (count === 0 && !historyBox.querySelector('.line') && !empty.isConnected) {
       historyBox.appendChild(empty);
@@ -226,11 +248,166 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     return row;
   }
 
-  function promoteRow(row, text, stamp) {
-    row.classList.remove('speculative');
-    row.classList.add('final');
-    row.querySelector('.text').textContent = text;
-    row.querySelector('.time').textContent = stamp;
+  function appendWordNode(container, word) {
+    if (container.childNodes.length) container.appendChild(document.createTextNode(' '));
+    const span = document.createElement('span');
+    span.className = 'word';
+    span.textContent = word;
+    container.appendChild(span);
+  }
+
+  function blockNeedsNewRow(block, word) {
+    if (!block || block.sealed) return true;
+    if (block.words.length >= CAPTION_MAX_WORDS) return true;
+    const added = word.length + (block.words.length ? 1 : 0);
+    return block.chars + added > CAPTION_MAX_CHARS;
+  }
+
+  function sentenceEnds(word) {
+    return /[.!?]+["')\]]*$/.test(word);
+  }
+
+  function createLiveBlock() {
+    const block = {words: [], chars: 0, sealed: false, row: null, panel: null};
+    liveBlocks.push(block);
+    const panel = document.createElement('span');
+    panel.className = 'live-block';
+    partial.appendChild(panel);
+    block.panel = panel;
+    if (speculativeEnabled) block.row = makeRow('', 'speculative');
+    return block;
+  }
+
+  function ensureHistoryRow(block) {
+    if (block.row && block.row.isConnected) return block.row;
+    block.row = makeRow('', 'speculative');
+    const tx = block.row.querySelector('.text');
+    for (const word of block.words) appendWordNode(tx, word);
+    return block.row;
+  }
+
+  function appendStableWord(word) {
+    const shouldFollow = speculativeEnabled && (follow || nearBottom());
+    let block = liveBlocks[liveBlocks.length - 1];
+    if (blockNeedsNewRow(block, word)) block = createLiveBlock();
+
+    block.words.push(word);
+    block.chars += word.length + (block.words.length > 1 ? 1 : 0);
+    displayedWords.push(word);
+    appendWordNode(block.panel, word);
+
+    if (speculativeEnabled) {
+      const row = ensureHistoryRow(block);
+      const tx = row.querySelector('.text');
+      const rowWords = tx.querySelectorAll('.word').length;
+      if (rowWords < block.words.length) appendWordNode(tx, word);
+    }
+
+    if (sentenceEnds(word) && block.words.length >= CAPTION_MIN_WORDS) block.sealed = true;
+    if (shouldFollow) historyBox.scrollTop = historyBox.scrollHeight;
+  }
+
+  function lockedWords() {
+    return displayedWords.concat(pendingWords);
+  }
+
+  function drainWordQueue() {
+    if (wordTimer !== null || !pendingWords.length) return;
+    appendStableWord(pendingWords.shift());
+    if (pendingWords.length) {
+      wordTimer = setTimeout(() => {
+        wordTimer = null;
+        drainWordQueue();
+      }, WORD_REVEAL_MS);
+    }
+  }
+
+  function queueStableWords(words) {
+    if (!words.length) return;
+    pendingWords.push(...words);
+    drainWordQueue();
+  }
+
+  function flushWordQueue() {
+    if (wordTimer !== null) {
+      clearTimeout(wordTimer);
+      wordTimer = null;
+    }
+    while (pendingWords.length) appendStableWord(pendingWords.shift());
+  }
+
+  function stableContinuationIndex(words, limit) {
+    const stable = words.slice(0, limit);
+    const locked = lockedWords();
+    if (!locked.length) return 0;
+
+    if (locked.length <= stable.length) {
+      let prefixMatches = true;
+      for (let i = 0; i < locked.length; i += 1) {
+        if (!sameWord(locked[i], stable[i])) {
+          prefixMatches = false;
+          break;
+        }
+      }
+      if (prefixMatches) return locked.length;
+    }
+
+    const maxAnchor = Math.min(LIVE_ANCHOR_WORDS, locked.length, stable.length);
+    for (let len = maxAnchor; len >= 2; len -= 1) {
+      const suffix = locked.slice(locked.length - len);
+      for (let start = stable.length - len; start >= 0; start -= 1) {
+        let matches = true;
+        for (let j = 0; j < len; j += 1) {
+          if (!sameWord(suffix[j], stable[start + j])) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) return start + len;
+      }
+    }
+    return null;
+  }
+
+  function acceptPartial(text) {
+    const words = tokenizeWords(text);
+    if (!words.length) {
+      previousPartialWords = [];
+      return;
+    }
+    if (!previousPartialWords.length) {
+      previousPartialWords = words;
+      return;
+    }
+
+    const stableLimit = commonPrefixLength(previousPartialWords, words);
+    const start = stableContinuationIndex(words, stableLimit);
+    if (start !== null && stableLimit > start) {
+      queueStableWords(words.slice(start, stableLimit));
+    }
+    previousPartialWords = words;
+  }
+
+  function appendFinalRemainder(text) {
+    const words = tokenizeWords(text);
+    if (!words.length) return;
+    const start = stableContinuationIndex(words, words.length);
+    if (start === null) return;
+    queueStableWords(words.slice(start));
+    flushWordQueue();
+  }
+
+  function resetLiveState() {
+    previousPartialWords = [];
+    displayedWords = [];
+    pendingWords = [];
+    if (wordTimer !== null) clearTimeout(wordTimer);
+    wordTimer = null;
+    liveBlocks = [];
+    currentPartial = '';
+    partial.replaceChildren();
+    partial.classList.add('idle');
+    partial.textContent = '音声を待っています...';
   }
 
   function trimFinals() {
@@ -243,49 +420,45 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     countEl.textContent = count;
   }
 
-  function showSpeculative(text) {
-    if (!speculativeEnabled) return;
-    const clean = currentCaptionBlock(text);
-    if (!clean) {
-      if (speculativeRow?.isConnected) speculativeRow.remove();
-      speculativeRow = null;
-      ensureEmpty();
-      return;
+  function finalizeLiveRows(text) {
+    appendFinalRemainder(text);
+    const stamp = timestamp();
+    const rows = [];
+    for (const block of liveBlocks) {
+      if (!block.words.length) continue;
+      const row = speculativeEnabled ? ensureHistoryRow(block) : null;
+      if (!row) continue;
+      row.classList.remove('speculative');
+      row.classList.add('final');
+      row.querySelector('.time').textContent = stamp;
+      rows.push(row);
     }
-    const shouldFollow = follow || nearBottom();
-    if (!speculativeRow || !speculativeRow.isConnected) {
-      speculativeRow = makeRow(clean, 'speculative');
-    } else {
-      speculativeRow.querySelector('.text').textContent = clean;
-    }
-    if (shouldFollow) goLatest();
+    return rows;
   }
 
   function addFinal(text) {
-    const blocks = splitCaptionText(text);
-    if (!blocks.length) return;
     const shouldFollow = follow || nearBottom();
-    const stamp = timestamp();
-    let row = speculativeRow && speculativeRow.isConnected ? speculativeRow : null;
+    let added = 0;
 
-    if (row) {
-      // The speculative row represents the current tail of the utterance. Put
-      // earlier finalized blocks immediately before it, then promote that same
-      // bottom row to the final tail so text does not jump back to sentence 1.
-      for (const block of blocks.slice(0, -1)) {
-        makeRow(block, 'final', stamp, row);
-      }
-      promoteRow(row, blocks[blocks.length - 1], stamp);
-      speculativeRow = null;
+    if (speculativeEnabled && lockedWords().length) {
+      added = finalizeLiveRows(text).length;
     } else {
+      const blocks = splitCaptionText(text);
+      if (!blocks.length) {
+        resetLiveState();
+        return;
+      }
+      const stamp = timestamp();
       for (const block of blocks) makeRow(block, 'final', stamp);
+      added = blocks.length;
     }
 
+    resetLiveState();
     trimFinals();
     if (shouldFollow) {
       goLatest();
-    } else {
-      unseen += blocks.length;
+    } else if (added) {
+      unseen += added;
       jump.hidden = false;
       jump.textContent = `最新へ (${unseen})`;
     }
@@ -294,24 +467,32 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   function updatePartialDisplay(text) {
     currentPartial = text || '';
     if (currentPartial.trim()) {
-      partial.classList.remove('idle'); partial.textContent = currentPartial;
-    } else {
-      partial.classList.add('idle'); partial.textContent = '音声を待っています...';
+      if (partial.classList.contains('idle')) {
+        partial.classList.remove('idle');
+        partial.replaceChildren();
+      }
+      acceptPartial(currentPartial);
     }
-    showSpeculative(currentPartial);
+  }
+
+  function rebuildSpeculativeRows() {
+    for (const block of liveBlocks) ensureHistoryRow(block);
+  }
+
+  function removeSpeculativeRows() {
+    for (const block of liveBlocks) {
+      if (block.row?.isConnected) block.row.remove();
+      block.row = null;
+    }
+    ensureEmpty();
   }
 
   function applySpeculativeMode() {
     live.hidden = speculativeEnabled;
     speculativeToggle.textContent = `speculative: ${speculativeEnabled ? 'ON' : 'OFF'}`;
     speculativeToggle.setAttribute('aria-pressed', speculativeEnabled ? 'true' : 'false');
-    if (speculativeEnabled) {
-      showSpeculative(currentPartial);
-    } else if (speculativeRow?.isConnected) {
-      speculativeRow.remove();
-      speculativeRow = null;
-      ensureEmpty();
-    }
+    if (speculativeEnabled) rebuildSpeculativeRows();
+    else removeSpeculativeRows();
   }
 
   speculativeToggle.addEventListener('click', () => {
@@ -343,11 +524,8 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   const es = new EventSource('/events');
   es.onopen = () => {
     status.textContent = 'connected';
-    // The server replays the finalized buffer on every SSE reconnect. Clear
-    // rendered rows first so a transient reconnect never duplicates captions.
     historyBox.querySelectorAll('.line').forEach(x => x.remove());
-    speculativeRow = null; currentPartial = '';
-    partial.classList.add('idle'); partial.textContent = '音声を待っています...';
+    resetLiveState();
     count = 0; countEl.textContent = '0'; unseen = 0; follow = true;
     jump.hidden = true; jump.textContent = '最新へ'; ensureEmpty();
   };
@@ -357,8 +535,6 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     if (ev.type === 'partial') {
       updatePartialDisplay(ev.text || '');
     } else if (ev.type === 'final') {
-      currentPartial = '';
-      partial.classList.add('idle'); partial.textContent = '音声を待っています...';
       addFinal(ev.text);
     }
   };
