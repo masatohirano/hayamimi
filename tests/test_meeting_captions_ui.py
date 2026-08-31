@@ -92,6 +92,6 @@ def test_meeting_caption_display_chunks_long_utterances():
     assert '<span class="count"><span id="count">0</span> 字幕</span>' in html
 
 
-def test_windows_meeting_vad_defaults_to_200ms_silence():
+def test_windows_meeting_vad_defaults_to_350ms_silence():
     source = (ROOT / "scripts" / "meeting_captions.py").read_text(encoding="utf-8")
-    assert 'ap.add_argument("--min-silence", type=float, default=0.20,' in source
+    assert 'ap.add_argument("--min-silence", type=float, default=0.35,' in source
