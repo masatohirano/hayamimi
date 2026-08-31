@@ -65,7 +65,7 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
 </section>
 <div id="history-head">
   <strong>確定済み</strong>
-  <span class="count"><span id="count">0</span> 発話</span>
+  <span class="count"><span id="count">0</span> 字幕</span>
   <button id="copy-all" type="button">全体をコピー</button>
 </div>
 <main id="history">
@@ -86,6 +86,9 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   let speculativeRow = null;
   let speculativeEnabled = localStorage.getItem('hayamimi-speculative') !== 'off';
   const MAX_LINES = 1000;
+  const CAPTION_MAX_WORDS = 24;
+  const CAPTION_MIN_WORDS = 10;
+  const CAPTION_MAX_CHARS = 160;
 
   function nearBottom() {
     return historyBox.scrollHeight - historyBox.scrollTop - historyBox.clientHeight < 90;
@@ -106,19 +109,128 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
     });
   }
 
+  function normalizeCaptionText(text) {
+    return (text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function captionWordCount(text) {
+    const clean = normalizeCaptionText(text);
+    return clean ? clean.split(' ').length : 0;
+  }
+
+  function fitsCaption(text) {
+    const clean = normalizeCaptionText(text);
+    return captionWordCount(clean) <= CAPTION_MAX_WORDS && clean.length <= CAPTION_MAX_CHARS;
+  }
+
+  function splitLongCaption(text) {
+    const clean = normalizeCaptionText(text);
+    if (!clean) return [];
+    const words = clean.split(' ');
+    const chunks = [];
+    let start = 0;
+
+    while (start < words.length) {
+      let end = start;
+      let chars = 0;
+      while (end < words.length && end - start < CAPTION_MAX_WORDS) {
+        const added = words[end].length + (end > start ? 1 : 0);
+        if (end > start && chars + added > CAPTION_MAX_CHARS) break;
+        chars += added;
+        end += 1;
+      }
+      if (end === start) end += 1;
+
+      // Avoid an awkward 24-word block followed by a one- or two-word tail.
+      const tail = words.length - end;
+      if (tail > 0 && tail < CAPTION_MIN_WORDS && end - start > CAPTION_MIN_WORDS) {
+        const giveBack = CAPTION_MIN_WORDS - tail;
+        end = Math.max(start + CAPTION_MIN_WORDS, end - giveBack);
+      }
+
+      // Prefer a nearby clause boundary without creating a tiny block.
+      if (end < words.length && end - start > CAPTION_MIN_WORDS) {
+        for (let i = end; i > start + CAPTION_MIN_WORDS; i -= 1) {
+          if (/[,;:]$/.test(words[i - 1])) {
+            end = i;
+            break;
+          }
+        }
+      }
+
+      chunks.push(words.slice(start, end).join(' '));
+      start = end;
+    }
+    return chunks;
+  }
+
+  function sentenceUnits(text) {
+    const clean = normalizeCaptionText(text);
+    if (!clean) return [];
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      try {
+        const segmenter = new Intl.Segmenter('en', {granularity:'sentence'});
+        const units = Array.from(segmenter.segment(clean), x => x.segment.trim()).filter(Boolean);
+        if (units.length) return units;
+      } catch (_) {}
+    }
+    const fallback = clean.match(/[^.!?]+(?:[.!?]+(?:["')\]]+)?(?=\s|$)|$)/g);
+    return fallback ? fallback.map(x => x.trim()).filter(Boolean) : [clean];
+  }
+
+  function splitCaptionText(text) {
+    const blocks = [];
+    let current = '';
+    const flush = () => {
+      if (current) blocks.push(current);
+      current = '';
+    };
+
+    for (const unit of sentenceUnits(text)) {
+      if (!fitsCaption(unit)) {
+        flush();
+        blocks.push(...splitLongCaption(unit));
+        continue;
+      }
+      const joined = current ? `${current} ${unit}` : unit;
+      if (current && !fitsCaption(joined)) {
+        flush();
+        current = unit;
+      } else {
+        current = joined;
+      }
+    }
+    flush();
+    return blocks;
+  }
+
+  function currentCaptionBlock(text) {
+    const blocks = splitCaptionText(text);
+    return blocks.length ? blocks[blocks.length - 1] : '';
+  }
+
   function ensureEmpty() {
     if (count === 0 && !historyBox.querySelector('.line') && !empty.isConnected) {
       historyBox.appendChild(empty);
     }
   }
 
-  function makeRow(text, kind) {
+  function makeRow(text, kind, stamp = timestamp(), before = null) {
     if (empty.isConnected) empty.remove();
     const row = document.createElement('div'); row.className = `line ${kind}`;
-    const tm = document.createElement('div'); tm.className = 'time'; tm.textContent = timestamp();
+    const tm = document.createElement('div'); tm.className = 'time'; tm.textContent = stamp;
     const tx = document.createElement('div'); tx.className = 'text'; tx.textContent = text;
-    row.append(tm, tx); historyBox.appendChild(row);
+    row.append(tm, tx);
+    if (before && before.isConnected) historyBox.insertBefore(row, before);
+    else historyBox.appendChild(row);
     return row;
+  }
+
+  function promoteRow(row, text, stamp) {
+    row.classList.remove('speculative');
+    row.classList.add('final');
+    row.querySelector('.text').textContent = text;
+    row.querySelector('.time').textContent = stamp;
   }
 
   function trimFinals() {
@@ -133,8 +245,8 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
 
   function showSpeculative(text) {
     if (!speculativeEnabled) return;
-    const clean = text || '';
-    if (!clean.trim()) {
+    const clean = currentCaptionBlock(text);
+    if (!clean) {
       if (speculativeRow?.isConnected) speculativeRow.remove();
       speculativeRow = null;
       ensureEmpty();
@@ -150,23 +262,32 @@ MEETING_DASHBOARD_HTML = r"""<!doctype html>
   }
 
   function addFinal(text) {
-    if (!text || !text.trim()) return;
+    const blocks = splitCaptionText(text);
+    if (!blocks.length) return;
     const shouldFollow = follow || nearBottom();
+    const stamp = timestamp();
     let row = speculativeRow && speculativeRow.isConnected ? speculativeRow : null;
+
     if (row) {
-      row.classList.remove('speculative');
-      row.classList.add('final');
-      row.querySelector('.text').textContent = text;
-      row.querySelector('.time').textContent = timestamp();
+      // The speculative row represents the current tail of the utterance. Put
+      // earlier finalized blocks immediately before it, then promote that same
+      // bottom row to the final tail so text does not jump back to sentence 1.
+      for (const block of blocks.slice(0, -1)) {
+        makeRow(block, 'final', stamp, row);
+      }
+      promoteRow(row, blocks[blocks.length - 1], stamp);
       speculativeRow = null;
     } else {
-      row = makeRow(text, 'final');
+      for (const block of blocks) makeRow(block, 'final', stamp);
     }
+
     trimFinals();
     if (shouldFollow) {
       goLatest();
     } else {
-      unseen += 1; jump.hidden = false; jump.textContent = `最新へ (${unseen})`;
+      unseen += blocks.length;
+      jump.hidden = false;
+      jump.textContent = `最新へ (${unseen})`;
     }
   }
 
