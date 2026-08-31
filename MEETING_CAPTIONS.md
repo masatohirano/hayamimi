@@ -26,9 +26,11 @@ If the meeting application is configured to use a different output device, run:
 - VAD finalizes after 0.20 seconds of silence by default for lower meeting-caption latency.
 - A meeting-focused browser dashboard opens automatically at `http://localhost:8833/dashboard`.
 - Speculative captions are enabled by default: the current partial transcript appears as a dimmed row at the end of the history, and the same row is promoted to a finalized caption when the final result arrives.
+- Display chunking is independent of VAD/ASR segmentation. Final utterances are split at sentence boundaries when possible; an overlong sentence is split at clause or word boundaries with a 24-word / 160-character cap. The speculative row shows only the current tail block instead of growing into the whole utterance.
+- When one final utterance becomes several display blocks, earlier blocks are inserted immediately above the speculative row and that same speculative row is promoted to the final tail block.
 - The `speculative: ON/OFF` button switches between that mode and the separate Live area. The preference is retained in the browser.
 - The history follows the newest caption only while you are already at the bottom. If you scroll up to reread something, partial updates and new finals do not pull you away; a `最新へ` button returns to the newest line after a new final arrives.
-- Up to 1000 finalized lines are buffered in memory and replayed if the browser reconnects or refreshes during the session.
+- The browser keeps up to 1000 finalized display blocks. The server retains up to 1000 final utterance events and replays them if the browser reconnects or refreshes during the session.
 - Finalized lines can be selected and copied individually, and the `全体をコピー` button copies only finalized captions, not the speculative row.
 - No meeting bot joins the call.
 - Audio stays local to Hayamimi's normal CPU-only pipeline.
