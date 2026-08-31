@@ -15,8 +15,8 @@ The default Windows playback device is captured through WASAPI loopback. You can
 If the meeting application is configured to use a different output device, run:
 
 ```bat
-.venv\Scripts\python scripts\meeting_captions_buffered.py --list-devices
-.venv\Scripts\python scripts\meeting_captions_buffered.py --device 12
+.venv\Scripts\python scripts\meeting_captions_newest_first.py --list-devices
+.venv\Scripts\python scripts\meeting_captions_newest_first.py --device 12
 ```
 
 ## Defaults
@@ -32,7 +32,7 @@ If the meeting application is configured to use a different output device, run:
 - Live blocks grow only forward. A new block starts at a sentence boundary when practical, or at the existing 24-word / 160-character display limit. This avoids recomputing earlier line breaks while speech is still in progress.
 - On finalization, remaining final words are appended when they align with the live stream, and the same streamed rows are promoted from speculative to finalized without rewriting their text. Short utterances that never produced stable partial words still use the normal sentence-aware final splitter.
 - The `speculative: ON/OFF` button switches between the history-integrated live stream and the separate Live area. The preference is retained in the browser.
-- The history follows the newest caption only while you are already at the bottom. If you scroll up to reread something, partial updates and new finals do not pull you away; a `最新へ` button returns to the newest line after a new final arrives.
+- Finalized-caption history is newest-first, so the latest confirmed caption stays directly below the live area instead of accumulating at the bottom. If you scroll down to reread older captions, new captions do not pull you back; `最新へ` returns to the top.
 - The browser keeps up to 1000 finalized display blocks. The server retains up to 1000 final utterance events and replays them if the browser reconnects or refreshes during the session.
 - Finalized lines can be selected and copied individually, and the `全体をコピー` button copies only finalized captions.
 - No meeting bot joins the call.
